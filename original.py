@@ -503,6 +503,103 @@ if mode == "Файл (CSV/XLSX)":
         # styled with both types of highlights
         styled_df = style_suspicious_and_low(df, semantic_threshold, lexical_threshold, low_score_threshold)
         st.dataframe(styled_df, use_container_width=True)
+        def show_analysis(df: pd.DataFrame):
+    """Полная, но компактная аналитика по результатам моделей"""
+    if "score" not in df.columns or "lexical_score" not in df.columns:
+        st.warning("❗ Нет колонок 'score' и 'lexical_score' — анализ невозможен.")
+        return
+
+    # 📊 Краткая статистика
+    with st.expander("📊 Краткая статистика", expanded=True):
+        mean_score = df["score"].mean()
+        min_score = df["score"].min()
+        max_score = df["score"].max()
+        low_count = (df["score"] < low_score_threshold).sum()
+        susp_count = ((df["score"] >= semantic_threshold) & (df["lexical_score"] <= lexical_threshold)).sum()
+
+        st.markdown(f"""
+        - **Средний score:** {mean_score:.4f}  
+        - **Минимальный score:** {min_score:.4f}  
+        - **Максимальный score:** {max_score:.4f}  
+        - **Низкие оценки (< {low_score_threshold}):** {low_count} из {len(df)}  
+        - **Неочевидные совпадения:** {susp_count} из {len(df)}
+        """)
+
+    # 📈 Гистограмма распределений
+    with st.expander("📈 Распределение score"):
+        fig, ax = plt.subplots(figsize=(5, 3))
+
+        if enable_ab_test and "score_b" in df.columns:
+            ax.hist(df["score"], bins=20, alpha=0.6, label="Модель A", edgecolor='black')
+            ax.hist(df["score_b"], bins=20, alpha=0.6, label="Модель B", edgecolor='black')
+            ax.legend()
+        else:
+            ax.hist(df["score"], bins=20, edgecolor='black')
+
+        ax.set_xlabel("Score")
+        ax.set_ylabel("Количество")
+        ax.set_title("Распределение оценок")
+        st.pyplot(fig)
+
+    # 📂 Статистика по темам
+    if "topics_list" in df.columns:
+        with st.expander("📂 Средний score по темам"):
+            topic_stats = {}
+            for _, row in df.iterrows():
+                for t in row["topics_list"]:
+                    topic_stats.setdefault(t, []).append(row["score"])
+            topic_df = pd.DataFrame([
+                {"topic": t, "mean_score": np.mean(scores), "count": len(scores)}
+                for t, scores in topic_stats.items()
+            ]).sort_values("mean_score", ascending=False)
+            st.dataframe(topic_df, use_container_width=True)
+
+    # ⚖️ Разногласия A/B теста
+    if enable_ab_test and "score_b" in df.columns:
+        with st.expander("⚖️ Разногласия между моделью A и B"):
+            df["score_diff"] = df["score_b"] - df["score"]
+            diff_threshold = st.slider("Порог разницы score", 0.0, 1.0, 0.2, 0.01)
+            disag_df = df[abs(df["score_diff"]) >= diff_threshold].copy()
+            st.write(f"Найдено {len(disag_df)} пар с разницей ≥ {diff_threshold}")
+            if not disag_df.empty:
+                st.dataframe(disag_df.sort_values("score_diff", ascending=False), use_container_width=True)
+
+    # 🔍 Топ-10 неочевидных совпадений
+    with st.expander("🔍 Топ-10 неочевидных совпадений"):
+        susp_df = df[(df["score"] >= semantic_threshold) & (df["lexical_score"] <= lexical_threshold)].copy()
+        susp_df = susp_df.sort_values("score", ascending=False).head(10)
+
+        if susp_df.empty:
+            st.info("Нет пар, удовлетворяющих критериям.")
+        else:
+            idx = st.selectbox("Выбери пару для просмотра", susp_df.index, format_func=lambda i: f"{susp_df.loc[i, 'text_a']} — {susp_df.loc[i, 'text_b']}")
+            st.dataframe(susp_df, use_container_width=True)
+
+            if idx in susp_df.index:
+                st.markdown("**Полный контекст пары:**")
+                st.write(f"**Text A:** {df.loc[idx, 'text_a']}")
+                st.write(f"**Text B:** {df.loc[idx, 'text_b']}")
+                st.write(f"**Score:** {df.loc[idx, 'score']}")
+                if 'score_b' in df.columns:
+                    st.write(f"**Score B:** {df.loc[idx, 'score_b']}")
+
+    # ⬇️ Топ-10 самых низких оценок
+    with st.expander("⬇️ Топ-10 самых низких оценок"):
+        low_df = df.sort_values("score", ascending=True).head(10)
+
+        if low_df.empty:
+            st.info("Нет низких оценок для отображения.")
+        else:
+            idx_low = st.selectbox("Выбери пару для просмотра", low_df.index, format_func=lambda i: f"{low_df.loc[i, 'text_a']} — {low_df.loc[i, 'text_b']}")
+            st.dataframe(low_df, use_container_width=True)
+
+            if idx_low in low_df.index:
+                st.markdown("**Полный контекст пары:**")
+                st.write(f"**Text A:** {df.loc[idx_low, 'text_a']}")
+                st.write(f"**Text B:** {df.loc[idx_low, 'text_b']}")
+                st.write(f"**Score:** {df.loc[idx_low, 'score']}")
+                if 'score_b' in df.columns:
+                    st.write(f"**Score B:** {df.loc[idx_low, 'score_b']}")
 
         st.subheader("Гистограмма распределения similarity score (модель A)")
         chart = alt.Chart(pd.DataFrame({"score": df["score"]})).mark_bar().encode(
