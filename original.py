@@ -69,42 +69,13 @@ def jaccard_tokens(a: str, b: str) -> float:
 
 def style_low_score_rows(df, threshold=0.75):
     def highlight(row):
+        # handle missing score column gracefully
         score_val = row.get('score', None)
         try:
             cond = pd.notna(score_val) and float(score_val) < threshold
         except Exception:
             cond = False
         return ['background-color: #ffcccc' if cond else '' for _ in row]
-    return df.style.apply(highlight, axis=1)
-
-def style_suspicious_and_low(df, sem_thresh: float, lex_thresh: float, low_score_thresh: float):
-    """
-    Возвращает styled dataframe: 
-    - строки с score < low_score_thresh -> розовый (как раньше)
-    - строки, которые являются 'неочевидными совпадениями' (score >= sem_thresh and lexical_score <= lex_thresh) -> жёлто-зелёный
-    Если обе метки — применяем приоритет 'неочевидного' (отличный оттенок).
-    """
-    def highlight(row):
-        out = []
-        try:
-            score = float(row.get('score', 0))
-        except Exception:
-            score = 0.0
-        try:
-            lex = float(row.get('lexical_score', 0))
-        except Exception:
-            lex = 0.0
-
-        is_low_score = (score < low_score_thresh)
-        is_suspicious = (score >= sem_thresh and lex <= lex_thresh)
-        for _ in row:
-            if is_suspicious:
-                out.append('background-color: #fff2b8')  # light yellow/orange for suspicious semantic matches
-            elif is_low_score:
-                out.append('background-color: #ffcccc')  # light red for low semantic score
-            else:
-                out.append('')
-        return out
     return df.style.apply(highlight, axis=1)
 
 # --------------------
@@ -132,6 +103,8 @@ def download_file_from_gdrive(file_id: str) -> str:
         with tarfile.open(archive_path, 'r:*') as tar_ref:
             tar_ref.extractall(model_dir)
     else:
+        # Если это одиночный файл (например pytorch .bin) — положим его в папку,
+        # но обычно в Google Drive нужно загружать архив папки модели.
         try:
             shutil.copy(archive_path, model_dir)
         except Exception:
@@ -161,7 +134,7 @@ def encode_texts_in_batches(model, texts: List[str], batch_size: int = 64) -> np
 # --------------------
 
 st.set_page_config(page_title="Synonym Checker (with A/B, History)", layout="wide")
-st.title("🔎 Synonym Checker")
+st.title("🔎 Synonym Checker — с выбором модели, историей, A/B тестом и визуализацией")
 
 # -- Выбор источника модели --
 st.sidebar.header("Настройки модели")
@@ -183,13 +156,6 @@ else:
     ab_model_id = ""
 
 batch_size = st.sidebar.number_input("Batch size для энкодинга", min_value=8, max_value=1024, value=64, step=8)
-
-# ---- Detector settings for semantic-high / lexical-low
-st.sidebar.header("Детектор неочевидных совпадений")
-enable_detector = st.sidebar.checkbox("Включить детектор (high sem, low lex)", value=True)
-semantic_threshold = st.sidebar.slider("Порог семантической схожести (>=)", 0.0, 1.0, 0.80, 0.01)
-lexical_threshold = st.sidebar.slider("Порог лексической похожести (<=)", 0.0, 1.0, 0.30, 0.01)
-low_score_threshold = st.sidebar.slider("Порог низкой семантической схожести (низкая подсветка)", 0.0, 1.0, 0.75, 0.01)
 
 try:
     with st.spinner("Загружаю основную модель..."):
@@ -229,9 +195,11 @@ def clear_history():
 def add_suggestions(phrases: List[str]):
     """Добавить список фраз в suggestions (уникальные, последние сверху)."""
     s = [p for p in phrases if p and isinstance(p, str)]
+    # keep uniqueness while preserving order (new items first)
     for p in reversed(s):
         if p not in st.session_state["suggestions"]:
             st.session_state["suggestions"].insert(0, p)
+    # trim to reasonable size
     st.session_state["suggestions"] = st.session_state["suggestions"][:200]
 
 # Helper to set manual input values via button callbacks
@@ -261,7 +229,7 @@ if mode == "Ручной ввод":
     st.header("Ручной ввод пар фраз")
 
     # Show top suggestions if any
-    if False:
+    if st.session_state["suggestions"]:
         st.caption("Подсказки (нажмите, чтобы вставить в поле):")
         cols = st.columns(5)
         for i, s_phrase in enumerate(st.session_state["suggestions"][:20]):
@@ -280,14 +248,14 @@ if mode == "Ручной ввод":
             st.session_state["manual_text2"] = ""
 
         text1 = st.text_input("Фраза 1", key="manual_text1")
-        if False:
+        if st.session_state["suggestions"]:
             s_cols = st.columns(10)
             for i, sp in enumerate(st.session_state["suggestions"][:10]):
                 if s_cols[i % 10].button(sp, key=f"t1_sugg_{i}"):
                     _set_manual_value("manual_text1", sp)
 
         text2 = st.text_input("Фраза 2", key="manual_text2")
-        if False:
+        if st.session_state["suggestions"]:
             s_cols2 = st.columns(10)
             for i, sp in enumerate(st.session_state["suggestions"][:10]):
                 if s_cols2[i % 10].button(sp, key=f"t2_sugg_{i}"):
@@ -299,6 +267,7 @@ if mode == "Ручной ввод":
             else:
                 t1 = preprocess_text(text1)
                 t2 = preprocess_text(text2)
+                # add to suggestions
                 add_suggestions([t1, t2])
 
                 emb1 = encode_texts_in_batches(model_a, [t1], batch_size)
@@ -310,19 +279,14 @@ if mode == "Ручной ввод":
                 col1, col2, col3 = st.columns([1,1,1])
                 col1.metric("Score A", f"{score_a:.4f}")
                 col2.metric("Jaccard (lexical)", f"{lex:.4f}")
-
-                # Check detector for single pair
-                is_suspicious_single = False
-                if enable_detector and (score_a >= semantic_threshold) and (lex <= lexical_threshold):
-                    is_suspicious_single = True
-                    st.warning("Обнаружено НЕОЧЕВИДНОЕ совпадение: высокая семантическая схожесть, низкая лексическая похожесть.")
-
+                # A/B part
                 if model_b is not None:
                     emb1b = encode_texts_in_batches(model_b, [t1], batch_size)
                     emb2b = encode_texts_in_batches(model_b, [t2], batch_size)
                     score_b = float(util.cos_sim(emb1b[0], emb2b[0]).item())
                     delta = score_b - score_a
                     col3.metric("Score B", f"{score_b:.4f}", delta=f"{delta:+.4f}")
+                    # bar chart for visual comparison: set width via chart.properties, don't pass width to st.altair_chart
                     comp_df = pd.DataFrame({
                         "model": ["A", "B"],
                         "score": [score_a, score_b]
@@ -336,6 +300,7 @@ if mode == "Ручной ввод":
                 else:
                     col3.write("")
 
+                # Save to history button
                 if st.button("Сохранить результат в историю", key="save_manual_single"):
                     rec = {
                         "source": "manual_single",
@@ -343,7 +308,6 @@ if mode == "Ручной ввод":
                         "score": score_a,
                         "score_b": float(score_b) if model_b is not None else None,
                         "lexical_score": lex,
-                        "is_suspicious": is_suspicious_single,
                         "model_a": model_id,
                         "model_b": ab_model_id if enable_ab_test else None,
                         "timestamp": pd.Timestamp.now().isoformat()
@@ -375,6 +339,7 @@ if mode == "Ручной ввод":
                 if not parsed:
                     st.warning("Нет корректных пар для проверки (проверьте формат).")
                 else:
+                    # add to suggestions
                     add_suggestions([p for pair in parsed for p in pair])
 
                     phrases_all = list({p for pair in parsed for p in pair})
@@ -399,34 +364,23 @@ if mode == "Ручной ввод":
                         rows.append({"phrase_1": p1, "phrase_2": p2, "score": score_a, "score_b": score_b, "lexical_score": lex})
                     res_df = pd.DataFrame(rows)
                     st.subheader("Результаты (ручной массовый ввод)")
-                    # styled with both types of highlights
-                    styled = style_suspicious_and_low(res_df, semantic_threshold, lexical_threshold, low_score_threshold)
-                    st.dataframe(styled, use_container_width=True)
+                    st.dataframe(style_low_score_rows(res_df), use_container_width=True)
                     csv_bytes = res_df.to_csv(index=False).encode('utf-8')
                     st.download_button("Скачать результаты CSV", data=csv_bytes, file_name="manual_results.csv", mime="text/csv")
-
-                    # Suspicious subset
-                    if enable_detector:
-                        susp_df = res_df[(res_df["score"] >= semantic_threshold) & (res_df["lexical_score"] <= lexical_threshold)]
-                        if not susp_df.empty:
-                            st.markdown("### Неочевидные совпадения (high semantic, low lexical)")
-                            st.write(f"Найдено {len(susp_df)} пар.")
-                            st.dataframe(susp_df, use_container_width=True)
-                            susp_csv = susp_df.to_csv(index=False).encode('utf-8')
-                            st.download_button("Скачать suspicious CSV", data=susp_csv, file_name="suspicious_manual_bulk.csv", mime="text/csv")
-                            if st.button("Сохранить suspicious в историю", key="save_susp_manual"):
-                                rec = {
-                                    "source": "manual_bulk_suspicious",
-                                    "pairs_count": len(susp_df),
-                                    "results": susp_df.to_dict(orient="records"),
-                                    "model_a": model_id,
-                                    "model_b": ab_model_id if enable_ab_test else None,
-                                    "timestamp": pd.Timestamp.now().isoformat(),
-                                    "semantic_threshold": semantic_threshold,
-                                    "lexical_threshold": lexical_threshold
-                                }
-                                add_to_history(rec)
-                                st.success("Сохранено в истории.")
+                    # Сохранение в историю
+                    if st.button("Сохранить результаты в историю (bulk)", key="save_manual_bulk"):
+                        content_hash = file_md5("\n".join(lines).encode("utf-8"))
+                        rec = {
+                            "source": "manual_bulk",
+                            "file_hash": content_hash,
+                            "pairs_count": len(rows),
+                            "results": res_df.to_dict(orient="records"),
+                            "model_a": model_id,
+                            "model_b": ab_model_id if enable_ab_test else None,
+                            "timestamp": pd.Timestamp.now().isoformat()
+                        }
+                        add_to_history(rec)
+                        st.success("Результаты сохранены в историю.")
 
 # --------------------
 # Загрузка файла с парами (старый режим)
@@ -494,14 +448,13 @@ if mode == "Файл (CSV/XLSX)":
             df["score_b"] = scores_b
         df["lexical_score"] = lexical_scores
 
-        highlight_threshold = low_score_threshold  # use chosen threshold
+        highlight_threshold = st.slider("Порог подсветки низкой схожести (score)", min_value=0.0, max_value=1.0, value=0.75)
 
         st.subheader("Результаты проверки пар")
         result_csv = df.to_csv(index=False).encode('utf-8')
         st.download_button("Скачать результаты CSV", data=result_csv, file_name="results.csv", mime="text/csv")
 
-        # styled with both types of highlights
-        styled_df = style_suspicious_and_low(df, semantic_threshold, lexical_threshold, low_score_threshold)
+        styled_df = style_low_score_rows(df, threshold=highlight_threshold)
         st.dataframe(styled_df, use_container_width=True)
 
         st.subheader("Гистограмма распределения similarity score (модель A)")
@@ -518,33 +471,6 @@ if mode == "Файл (CSV/XLSX)":
                 y='count()', tooltip=['count()']
             ).interactive()
             st.altair_chart(chart_b, use_container_width=True)
-
-        # Suspicious subset for file mode
-        if enable_detector:
-            susp_df = df[(df["score"] >= semantic_threshold) & (df["lexical_score"] <= lexical_threshold)]
-            st.markdown("### Неочевидные совпадения (high semantic, low lexical)")
-            if susp_df.empty:
-                st.write("Не найдено пар, соответствующих выбранным порогам.")
-            else:
-                st.write(f"Найдено {len(susp_df)} пар.")
-                st.dataframe(susp_df, use_container_width=True)
-                susp_csv = susp_df.to_csv(index=False).encode('utf-8')
-                st.download_button("Скачать suspicious CSV", data=susp_csv, file_name="suspicious_file_mode.csv", mime="text/csv")
-                if st.button("Сохранить suspicious в историю (file)", key="save_susp_file"):
-                    rec = {
-                        "source": "file_suspicious",
-                        "file_hash": file_hash,
-                        "file_name": uploaded_file.name,
-                        "pairs_count": len(susp_df),
-                        "results": susp_df.to_dict(orient="records"),
-                        "model_a": model_id,
-                        "model_b": ab_model_id if enable_ab_test else None,
-                        "timestamp": pd.Timestamp.now().isoformat(),
-                        "semantic_threshold": semantic_threshold,
-                        "lexical_threshold": lexical_threshold
-                    }
-                    add_to_history(rec)
-                    st.success("Сохранено в истории.")
 
         if st.button("Сохранить результаты проверки в историю"):
             record = {
@@ -567,38 +493,24 @@ if st.session_state["history"]:
     st.header("История проверок")
     for idx, rec in enumerate(reversed(st.session_state["history"])):
         st.markdown(f"### Проверка #{len(st.session_state['history']) - idx}")
-        # В истории могут быть записи разных типов — ручной single, manual_bulk, file, suspicious entries
+        # В истории могут быть записи разных типов — ручной single, manual_bulk, файл
         if rec.get("source") == "manual_single":
             p = rec.get("pair", {})
             st.markdown(f"**Ручной ввод (single)**  |  **Дата:** {rec.get('timestamp','-')}")
             st.markdown(f"**Фразы:** `{p.get('phrase_1','')}`  — `{p.get('phrase_2','')}`")
             st.markdown(f"**Score A:** {rec.get('score', '-')}, **Score B:** {rec.get('score_b', '-')}, **Lexical:** {rec.get('lexical_score','-')}")
-            if rec.get("is_suspicious"):
-                st.warning("Эта пара помечена как неочевидное совпадение (high semantic, low lexical).")
         elif rec.get("source") == "manual_bulk":
             st.markdown(f"**Ручной ввод (bulk)**  |  **Дата:** {rec.get('timestamp','-')}")
             st.markdown(f"**Пар:** {rec.get('pairs_count', 0)}  |  **Модель A:** {rec.get('model_a','-')}")
             saved_df = pd.DataFrame(rec.get("results", []))
             if not saved_df.empty:
-                styled_hist_df = style_suspicious_and_low(saved_df, rec.get("semantic_threshold", semantic_threshold), rec.get("lexical_threshold", lexical_threshold), low_score_threshold)
+                styled_hist_df = style_low_score_rows(saved_df, rec.get("highlight_threshold", 0.75))
                 st.dataframe(styled_hist_df, use_container_width=True)
-        elif rec.get("source") in ("manual_bulk_suspicious", "manual_bulk_suspicious"):
-            st.markdown(f"**Ручной suspicious**  |  **Дата:** {rec.get('timestamp','-')}")
-            st.markdown(f"**Пар:** {rec.get('pairs_count', 0)}  |  **Модель A:** {rec.get('model_a','-')}")
-            saved_df = pd.DataFrame(rec.get("results", []))
-            if not saved_df.empty:
-                st.dataframe(saved_df, use_container_width=True)
-        elif rec.get("source") == "file_suspicious":
-            st.markdown(f"**Файл (suspicious)**  |  **Файл:** {rec.get('file_name','-')}  |  **Дата:** {rec.get('timestamp','-')}")
-            st.markdown(f"**Пар:** {rec.get('pairs_count', 0)}  |  **Модель A:** {rec.get('model_a','-')}")
-            saved_df = pd.DataFrame(rec.get("results", []))
-            if not saved_df.empty:
-                st.dataframe(saved_df, use_container_width=True)
         else:
             st.markdown(f"**Файл:** {rec.get('file_name','-')}  |  **Дата:** {rec.get('timestamp','-')}")
             st.markdown(f"**Модель A:** {rec.get('model_a','-')}  |  **Модель B:** {rec.get('model_b','-')}")
             saved_df = pd.DataFrame(rec.get("results", []))
             if not saved_df.empty:
-                styled_hist_df = style_suspicious_and_low(saved_df, rec.get("semantic_threshold", semantic_threshold), rec.get("lexical_threshold", lexical_threshold), low_score_threshold)
+                styled_hist_df = style_low_score_rows(saved_df, rec.get("highlight_threshold", 0.75))
                 st.dataframe(styled_hist_df, use_container_width=True)
         st.markdown("---")
