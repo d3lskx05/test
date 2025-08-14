@@ -304,48 +304,57 @@ if st.sidebar.button("Скачать историю в JSON"):
         st.sidebar.warning("История пустая")
 
 # --- режим работы ---
-# --- Инициализация состояний ---
+# Инициализация состояний
 if "mode" not in st.session_state:
     st.session_state.mode = "Файл (CSV/XLSX/JSON)"
 if "pending_mode" not in st.session_state:
     st.session_state.pending_mode = None
+# Версия UI: инкрементим, чтобы «перемонтировать» радио и сбросить его выбор визуально
+if "mode_ui_v" not in st.session_state:
+    st.session_state.mode_ui_v = 0
 
-# Радио с отдельным ключом
-mode_selector = st.radio(
+# Ключ радиокнопки зависит от текущего режима и версии UI
+radio_key = f"mode_selector_{st.session_state.mode}_{st.session_state.mode_ui_v}"
+
+# Радио (контролируем индексом, а не значением виджета)
+mode_choice = st.radio(
     "Режим проверки",
     ["Файл (CSV/XLSX/JSON)", "Ручной ввод"],
     index=0 if st.session_state.mode == "Файл (CSV/XLSX/JSON)" else 1,
     horizontal=True,
-    key="mode_selector"
+    key=radio_key
 )
 
-# Если выбрали другой режим — сохраняем как pending
-if mode_selector != st.session_state.mode and st.session_state.pending_mode is None:
-    st.session_state.pending_mode = mode_selector
+# Пользователь кликнул другой режим -> просим подтверждение
+if st.session_state.pending_mode is None and mode_choice != st.session_state.mode:
+    st.session_state.pending_mode = mode_choice
 
-# Логика подтверждения с кнопкой ❌
+# Полоса подтверждения
 if st.session_state.pending_mode:
-    col_warn, col_ok, col_close = st.columns([4, 1, 0.5])
+    col_warn, col_yes, col_close = st.columns([4, 1, 0.6])
     with col_warn:
         st.warning(
             f"Перейти в режим **{st.session_state.pending_mode}**? "
             "Текущие данные будут удалены."
         )
-    with col_ok:
+
+    # Подтвердить
+    with col_yes:
         if st.button("✅ Да"):
-            # Меняем режим и очищаем данные
             st.session_state.mode = st.session_state.pending_mode
             st.session_state.pending_mode = None
-            for key in ["uploaded_file", "manual_input"]:
-                st.session_state.pop(key, None)
-            st.rerun()
+            # Очистка только при подтверждении
+            for k in ["uploaded_file", "manual_input"]:
+                st.session_state.pop(k, None)
+            st.rerun()  # применяем новый режим
+
+    # Крестик: просто скрыть предупреждение и вернуть радио к текущему режиму
     with col_close:
         if st.button("❌", help="Отмена"):
-            # Скрываем предупреждение и возвращаем радио в текущее значение
             st.session_state.pending_mode = None
-            st.session_state.mode_selector = st.session_state.mode
+            st.session_state.mode_ui_v += 1  # меняем ключ -> радио перерисуется со старым режимом
 
-# Текущий активный режим
+# Текущий активный режим (далее в коде опираемся на него)
 mode = st.session_state.mode
 
 # ======= Блок: ручной ввод =======
