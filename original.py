@@ -82,7 +82,7 @@ def parse_topics_field(val) -> List[str]:
         try:
             parsed = json.loads(s)
             if isinstance(parsed, list):
-                return [str(x).strip() for x in parsed if x and str(x).strip()]
+                return [str(x).strip() for x in parsed if str(x).strip()]
         except Exception:
             pass
     for sep in [";", "|", ","]:
@@ -302,93 +302,8 @@ if st.sidebar.button("Скачать историю в JSON"):
     else:
         st.sidebar.warning("История пустая")
 
-# --- режим работы (с подтверждением переключения) ---
-if "mode" not in st.session_state:
-    st.session_state["mode"] = "Файл (CSV/XLSX/JSON)"
-if "pending_mode" not in st.session_state:
-    st.session_state["pending_mode"] = st.session_state["mode"]
-if "confirm_mode_change" not in st.session_state:
-    st.session_state["confirm_mode_change"] = False
-# Управляемый state для radio — чтобы можно было визуально «откатить» выбор
-if "mode_selector" not in st.session_state:
-    st.session_state["mode_selector"] = st.session_state["mode"]
-
-# --- Инициализация состояний ---
-if "mode" not in st.session_state:
-    st.session_state.mode = "Файл (CSV/XLSX/JSON)"
-if "pending_mode" not in st.session_state:
-    st.session_state.pending_mode = None
-
-# Радио с отдельным ключом
-mode_selector = st.radio(
-    "Режим проверки",
-    ["Файл (CSV/XLSX/JSON)", "Ручной ввод"],
-    index=0 if st.session_state.mode == "Файл (CSV/XLSX/JSON)" else 1,
-    horizontal=True,
-    key="mode_selector"
-)
-
-# Если выбрали другой режим — сохраняем как pending, но пока не меняем
-if mode_selector != st.session_state.mode and st.session_state.pending_mode is None:
-    st.session_state.pending_mode = mode_selector
-
-# Если ожидается подтверждение — показываем предупреждение с кнопками в одной строке
-if st.session_state.pending_mode:
-    col_warn, col_ok, col_cancel = st.columns([4, 1, 1])
-    with col_warn:
-        st.warning(
-            f"Перейти в режим **{st.session_state.pending_mode}**? "
-            "Текущие данные будут удалены."
-        )
-    with col_ok:
-        if st.button("✅ Да"):
-            # Меняем режим
-            st.session_state.mode = st.session_state.pending_mode
-            st.session_state.pending_mode = None
-            # --- Очистка данных ---
-            for key in ["uploaded_file", "manual_input"]:
-                st.session_state.pop(key, None)
-            st.experimental_rerun()
-    with col_cancel:
-        if st.button("❌ Нет"):
-            st.session_state.pending_mode = None
-            st.session_state.mode_selector = st.session_state.mode
-            st.experimental_rerun()
-
-# Текущий активный режим
-mode = st.session_state.mode
-)
-
-# Если пользователь кликнул другой режим — не переключаем сразу, а запрашиваем подтверждение
-if selected_mode != st.session_state["mode"] and not st.session_state["confirm_mode_change"]:
-    st.session_state["pending_mode"] = selected_mode
-    st.session_state["confirm_mode_change"] = True
-    # Визуально возвращаем radio к текущему режиму
-    st.session_state["mode_selector"] = st.session_state["mode"]
-
-if st.session_state["confirm_mode_change"]:
-    st.warning(
-        f"Вы действительно хотите перейти в режим '{st.session_state['pending_mode']}'? "
-        "Все несохранённые данные будут утеряны."
-    )
-    col_c1, col_c2 = st.columns(2)
-    with col_c1:
-        if st.button("Да, перейти", type="primary"):
-            # Подтверждаем смену режима
-            st.session_state["mode"] = st.session_state["pending_mode"]
-            st.session_state["mode_selector"] = st.session_state["mode"]
-            st.session_state["confirm_mode_change"] = False
-            # Очищаем временные данные, относящиеся к режимам
-            for k in ["dataset_editor", "bulk_pairs", "manual_text1", "manual_text2"]:
-                if k in st.session_state:
-                    del st.session_state[k]
-    with col_c2:
-        if st.button("Отмена"):
-            st.session_state["pending_mode"] = st.session_state["mode"]
-            st.session_state["confirm_mode_change"] = False
-            st.session_state["mode_selector"] = st.session_state["mode"]
-
-mode = st.session_state["mode"]
+# --- режим работы ---
+mode = st.radio("Режим проверки", ["Файл (CSV/XLSX/JSON)", "Ручной ввод"], index=0, horizontal=True)
 
 # ======= Блок: ручной ввод =======
 def _set_manual_value(key: str, val: str):
