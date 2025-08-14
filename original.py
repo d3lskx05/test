@@ -348,7 +348,7 @@ if st.session_state.pending_mode:
 # Выполняем rerun в самом конце
 if st.session_state.rerun_flag:
     st.session_state.rerun_flag = False
-    st.experimental_rerun()
+    st.rerun()  # <-- новый метод
 
 # Текущий активный режим
 mode = st.session_state.mode
