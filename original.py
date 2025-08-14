@@ -347,7 +347,6 @@ if st.session_state.pending_mode:
             if not st.session_state.pending_confirm:
                 # Первый клик: ставим флаг и ждем второго
                 st.session_state.pending_confirm = True
-                st.info("Нажмите ещё раз ✅ для подтверждения")
             else:
                 # Второй клик: реально меняем режим
                 st.session_state.mode = st.session_state.pending_mode
