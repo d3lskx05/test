@@ -341,8 +341,7 @@ if st.session_state.pending_mode:
             st.rerun()
     with col_close:
         if st.button("❌", help="Отмена"):
-            st.session_state.pending_mode = None
-            st.rerun()
+            st.session_state.pending_mode = None  # Просто скрыть надпись без перезапуска
 
 # Текущий активный режим
 mode = st.session_state.mode
