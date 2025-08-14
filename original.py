@@ -347,6 +347,7 @@ if st.session_state.pending_mode:
             if not st.session_state.pending_confirm:
                 # Первый клик: ставим флаг и ждем второго
                 st.session_state.pending_confirm = True
+                st.info("Нажмите ещё раз ✅ для подтверждения")
             else:
                 # Второй клик: реально меняем режим
                 st.session_state.mode = st.session_state.pending_mode
@@ -361,6 +362,7 @@ if st.session_state.pending_mode:
     with col_close:
         if st.button("❌", help="Отмена"):
             st.session_state.pending_mode = None
+            st.info("Нажмите ещё раз ❌ для подтверждения")
             st.session_state.pending_confirm = False
             st.session_state.mode_ui_v += 1  # меняем ключ -> радио перерисуется со старым режимом
 
