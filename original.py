@@ -308,6 +308,8 @@ if "mode" not in st.session_state:
     st.session_state.mode = "Файл (CSV/XLSX/JSON)"
 if "pending_mode" not in st.session_state:
     st.session_state.pending_mode = None
+if "rerun_flag" not in st.session_state:
+    st.session_state.rerun_flag = False
 
 # Радио с отдельным ключом
 mode_selector = st.radio(
@@ -318,11 +320,11 @@ mode_selector = st.radio(
     key="mode_selector"
 )
 
-# Если выбрали другой режим — сохраняем как pending, но пока не меняем
+# Если выбрали другой режим — сохраняем как pending
 if mode_selector != st.session_state.mode and st.session_state.pending_mode is None:
     st.session_state.pending_mode = mode_selector
 
-# Если ожидается подтверждение — показываем предупреждение с кнопками в одной строке
+# Логика подтверждения
 if st.session_state.pending_mode:
     col_warn, col_ok, col_cancel = st.columns([4, 1, 1])
     with col_warn:
@@ -332,18 +334,21 @@ if st.session_state.pending_mode:
         )
     with col_ok:
         if st.button("✅ Да"):
-            # Меняем режим
+            # Меняем режим и очищаем данные
             st.session_state.mode = st.session_state.pending_mode
             st.session_state.pending_mode = None
-            # --- Очистка данных ---
             for key in ["uploaded_file", "manual_input"]:
                 st.session_state.pop(key, None)
-            st.experimental_rerun()
+            st.session_state.rerun_flag = True  # Флаг на перезапуск
     with col_cancel:
         if st.button("❌ Нет"):
             st.session_state.pending_mode = None
-            st.session_state.mode_selector = st.session_state.mode
-            st.experimental_rerun()
+            st.session_state.rerun_flag = True  # Флаг на перезапуск
+
+# Выполняем rerun в самом конце
+if st.session_state.rerun_flag:
+    st.session_state.rerun_flag = False
+    st.experimental_rerun()
 
 # Текущий активный режим
 mode = st.session_state.mode
