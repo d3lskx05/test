@@ -341,7 +341,9 @@ if st.session_state.pending_mode:
             st.rerun()
     with col_close:
         if st.button("❌", help="Отмена"):
-            st.session_state.pending_mode = None  # Просто скрыть надпись без перезапуска
+            # Скрываем предупреждение и возвращаем радио в текущее значение
+            st.session_state.pending_mode = None
+            st.session_state.mode_selector = st.session_state.mode
 
 # Текущий активный режим
 mode = st.session_state.mode
