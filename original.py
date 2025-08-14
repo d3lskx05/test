@@ -309,8 +309,8 @@ if "mode" not in st.session_state:
     st.session_state.mode = "Файл (CSV/XLSX/JSON)"
 if "pending_mode" not in st.session_state:
     st.session_state.pending_mode = None
-if "rerun_flag" not in st.session_state:
-    st.session_state.rerun_flag = False
+if "pending_time" not in st.session_state:
+    st.session_state.pending_time = None
 
 # Радио с отдельным ключом
 mode_selector = st.radio(
@@ -321,13 +321,19 @@ mode_selector = st.radio(
     key="mode_selector"
 )
 
-# Если выбрали другой режим — сохраняем как pending
+# Если выбрали другой режим — сохраняем как pending и время показа
 if mode_selector != st.session_state.mode and st.session_state.pending_mode is None:
     st.session_state.pending_mode = mode_selector
+    st.session_state.pending_time = time.time()
+
+# Если прошло больше 5 секунд — убираем предупреждение
+if st.session_state.pending_mode and time.time() - st.session_state.pending_time > 5:
+    st.session_state.pending_mode = None
+    st.session_state.pending_time = None
 
 # Логика подтверждения
 if st.session_state.pending_mode:
-    col_warn, col_ok, col_cancel = st.columns([4, 1, 1])
+    col_warn, col_ok = st.columns([4, 1])
     with col_warn:
         st.warning(
             f"Перейти в режим **{st.session_state.pending_mode}**? "
@@ -338,18 +344,10 @@ if st.session_state.pending_mode:
             # Меняем режим и очищаем данные
             st.session_state.mode = st.session_state.pending_mode
             st.session_state.pending_mode = None
+            st.session_state.pending_time = None
             for key in ["uploaded_file", "manual_input"]:
                 st.session_state.pop(key, None)
-            st.session_state.rerun_flag = True  # Флаг на перезапуск
-    with col_cancel:
-        if st.button("❌ Нет"):
-            st.session_state.pending_mode = None
-            st.session_state.rerun_flag = True  # Флаг на перезапуск
-
-# Выполняем rerun в самом конце
-if st.session_state.rerun_flag:
-    st.session_state.rerun_flag = False
-    st.rerun()  # <-- новый метод
+            st.rerun()
 
 # Текущий активный режим
 mode = st.session_state.mode
