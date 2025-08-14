@@ -362,7 +362,7 @@ if st.session_state.pending_mode:
     with col_close:
         if st.button("❌", help="Отмена"):
             st.session_state.pending_mode = None
-            st.info("Подтвердить❌")
+            st.info("Подтвердить отмену❌")
             st.session_state.pending_confirm = False
             st.session_state.mode_ui_v += 1  # меняем ключ -> радио перерисуется со старым режимом
 
