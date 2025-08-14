@@ -303,9 +303,6 @@ if st.sidebar.button("Скачать историю в JSON"):
     else:
         st.sidebar.warning("История пустая")
 
-# --- режим работы ---
-import streamlit as st
-
 # --- Управление режимом с подтверждением (двойное нажатие на ✅) ---
 
 # Инициализация состояний
@@ -365,6 +362,7 @@ if st.session_state.pending_mode:
     # Крестик: просто скрыть предупреждение и вернуть радио к текущему режиму
     with col_close:
         if st.button("❌", help="Отмена"):
+            st.session_state.pending_mode = None
             st.session_state.pending_confirm = False
             st.session_state.mode_ui_v += 1  # меняем ключ -> радио перерисуется со старым режимом
 
