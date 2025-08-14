@@ -327,7 +327,11 @@ if mode_selector != st.session_state.mode and st.session_state.pending_mode is N
     st.session_state.pending_time = time.time()
 
 # Если прошло больше 5 секунд — убираем предупреждение
-if st.session_state.pending_mode and time.time() - st.session_state.pending_time > 5:
+if (
+    st.session_state.pending_mode
+    and st.session_state.pending_time is not None
+    and time.time() - st.session_state.pending_time > 5
+):
     st.session_state.pending_mode = None
     st.session_state.pending_time = None
 
