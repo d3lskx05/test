@@ -304,26 +304,22 @@ if st.sidebar.button("Скачать историю в JSON"):
         st.sidebar.warning("История пустая")
 
 # --- режим работы ---
-import streamlit as st
-
-# --- Управление режимом с подтверждением (двойное нажатие на ✅) ---
-
 # Инициализация состояний
 if "mode" not in st.session_state:
     st.session_state.mode = "Файл (CSV/XLSX/JSON)"
 if "pending_mode" not in st.session_state:
     st.session_state.pending_mode = None
 if "pending_confirm" not in st.session_state:
-    st.session_state.pending_confirm = False  # флаг для первого клика на ✅
+    st.session_state.pending_confirm = False
 if "pending_cancel" not in st.session_state:
-    st.session_state.pending_cancel = False  # флаг для первого клика на ❌
+    st.session_state.pending_cancel = False
 if "mode_ui_v" not in st.session_state:
     st.session_state.mode_ui_v = 0
 
-# Ключ радиокнопки зависит от текущего режима и версии UI
+# Ключ радиокнопки
 radio_key = f"mode_selector_{st.session_state.mode}_{st.session_state.mode_ui_v}"
 
-# Радио (контролируем индексом, а не значением виджета)
+# Радио
 mode_choice = st.radio(
     "Режим проверки",
     ["Файл (CSV/XLSX/JSON)", "Ручной ввод"],
@@ -332,7 +328,7 @@ mode_choice = st.radio(
     key=radio_key
 )
 
-# Пользователь кликнул другой режим -> просим подтверждение
+# Пользователь кликнул другой режим
 if st.session_state.pending_mode is None and mode_choice != st.session_state.mode:
     st.session_state.pending_mode = mode_choice
     st.session_state.pending_confirm = False
@@ -344,10 +340,11 @@ if st.session_state.pending_mode:
     with col_warn:
         message = f"Перейти в режим **{st.session_state.pending_mode}**? Текущие данные будут удалены."
         if st.session_state.pending_confirm:
-            message += " (Нажмите ✅ ещё раз для подтверждения)"
-        if st.session_state.pending_cancel:
-            message += " (Нажмите ❌ ещё раз для отмены)"
-        st.warning(message)
+            st.info(message + " (Нажмите ✅ ещё раз для подтверждения)")
+        elif st.session_state.pending_cancel:
+            st.error(message + " (Нажмите ❌ ещё раз для отмены)")
+        else:
+            st.warning(message)
 
     # Подтвердить
     with col_yes:
@@ -359,12 +356,11 @@ if st.session_state.pending_mode:
                 st.session_state.pending_mode = None
                 st.session_state.pending_confirm = False
                 st.session_state.pending_cancel = False
-                # Очистка данных
                 for k in ["uploaded_file", "manual_input"]:
                     st.session_state.pop(k, None)
                 st.rerun()
 
-    # Крестик: двойное нажатие для скрытия
+    # Крестик: двойное нажатие
     with col_close:
         if st.button("❌", help="Отмена"):
             if not st.session_state.pending_cancel:
