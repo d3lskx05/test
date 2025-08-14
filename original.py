@@ -26,17 +26,51 @@ def preprocess_text(t: Any) -> str:
 def file_md5(b: bytes) -> str:
     return hashlib.md5(b).hexdigest()
 
+def _try_read_json(raw: bytes) -> pd.DataFrame:
+    """
+    Пытаемся прочитать JSON/NDJSON в таблицу.
+    Поддержка форматов:
+      - [{"phrase_1": "...", "phrase_2": "...", ...}, ...]
+      - NDJSON (по строке на объект)
+      - {"phrase_1": [...], "phrase_2":[...], ...} (ориентация columns)
+    """
+    # 1) список объектов
+    try:
+        obj = json.loads(raw.decode("utf-8"))
+        if isinstance(obj, list):
+            return pd.DataFrame(obj)
+        if isinstance(obj, dict):
+            # columns-orient
+            return pd.DataFrame(obj)
+    except Exception:
+        pass
+    # 2) NDJSON
+    try:
+        return pd.read_json(io.BytesIO(raw), lines=True)
+    except Exception:
+        pass
+    raise ValueError("Не удалось распознать JSON/NDJSON")
+
 def read_uploaded_file_bytes(uploaded) -> Tuple[pd.DataFrame, str]:
     raw = uploaded.read()
     h = file_md5(raw)
+    # Пытаемся по расширению
+    name = (uploaded.name or "").lower()
+    if name.endswith(".json") or name.endswith(".ndjson"):
+        df = _try_read_json(raw)
+        return df, h
+    # CSV
     try:
         df = pd.read_csv(io.BytesIO(raw))
+        return df, h
     except Exception:
-        try:
-            df = pd.read_excel(io.BytesIO(raw))
-        except Exception as e:
-            raise ValueError("Файл должен быть CSV или Excel. Ошибка: " + str(e))
-    return df, h
+        pass
+    # Excel
+    try:
+        df = pd.read_excel(io.BytesIO(raw))
+        return df, h
+    except Exception as e:
+        raise ValueError("Файл должен быть CSV, Excel или JSON. Ошибка: " + str(e))
 
 def parse_topics_field(val) -> List[str]:
     if pd.isna(val):
@@ -48,7 +82,7 @@ def parse_topics_field(val) -> List[str]:
         try:
             parsed = json.loads(s)
             if isinstance(parsed, list):
-                return [str(x).strip() for x in parsed if str(x).strip()]
+                return [str(x).strip() for x in parsed if x and str(x).strip()]
         except Exception:
             pass
     for sep in [";", "|", ","]:
@@ -90,7 +124,7 @@ def style_suspicious_and_low(df, sem_thresh: float, lex_thresh: float, low_score
 
 # ======== Простые признаки для аналитики (без тяжёлых зависимостей) ========
 
-NEG_PAT = re.compile(r"\bне\b|\bни\b|\bнет\b")
+NEG_PAT = re.compile(r"\bне\b|\bни\b|\bнет\b", flags=re.IGNORECASE)
 NUM_PAT = re.compile(r"\b\d+\b")
 DATE_PAT = re.compile(r"\b\d{1,2}[./-]\d{1,2}([./-]\d{2,4})?\b")
 
@@ -129,6 +163,8 @@ def bootstrap_diff_ci(a: np.ndarray, b: np.ndarray, n_boot: int = 500, seed: int
     n = min(len(a), len(b))
     if n == 0:
         return 0.0, 0.0, 0.0
+    a = np.asarray(a)
+    b = np.asarray(b)
     for _ in range(n_boot):
         idx = rng.integers(0, n, n)
         diffs.append(np.mean(a[idx] - b[idx]))
@@ -189,8 +225,12 @@ st.title("🔎 Synonym Checker")
 # --- настройки модели ---
 st.sidebar.header("Настройки модели")
 model_source = st.sidebar.selectbox("Источник модели", ["huggingface", "google_drive"], index=0)
+
+# Надёжный дефолт для HF, чтобы не падать при пустом ID
+DEFAULT_HF = "sentence-transformers/all-MiniLM-L6-v2"
+
 if model_source == "huggingface":
-    model_id = st.sidebar.text_input("Hugging Face Model ID", value="")
+    model_id = st.sidebar.text_input("Hugging Face Model ID", value=DEFAULT_HF)
 else:
     model_id = st.sidebar.text_input("Google Drive File ID", value="1RR15OMLj9vfSrVa1HN-dRU-4LbkdbRRf")
 
@@ -262,8 +302,54 @@ if st.sidebar.button("Скачать историю в JSON"):
     else:
         st.sidebar.warning("История пустая")
 
-# --- режим работы ---
-mode = st.radio("Режим проверки", ["Файл (CSV/XLSX)", "Ручной ввод"], index=0, horizontal=True)
+# --- режим работы (с подтверждением переключения) ---
+if "mode" not in st.session_state:
+    st.session_state["mode"] = "Файл (CSV/XLSX/JSON)"
+if "pending_mode" not in st.session_state:
+    st.session_state["pending_mode"] = st.session_state["mode"]
+if "confirm_mode_change" not in st.session_state:
+    st.session_state["confirm_mode_change"] = False
+# Управляемый state для radio — чтобы можно было визуально «откатить» выбор
+if "mode_selector" not in st.session_state:
+    st.session_state["mode_selector"] = st.session_state["mode"]
+
+selected_mode = st.radio(
+    "Режим проверки",
+    ["Файл (CSV/XLSX/JSON)", "Ручной ввод"],
+    horizontal=True,
+    key="mode_selector"
+)
+
+# Если пользователь кликнул другой режим — не переключаем сразу, а запрашиваем подтверждение
+if selected_mode != st.session_state["mode"] and not st.session_state["confirm_mode_change"]:
+    st.session_state["pending_mode"] = selected_mode
+    st.session_state["confirm_mode_change"] = True
+    # Визуально возвращаем radio к текущему режиму
+    st.session_state["mode_selector"] = st.session_state["mode"]
+
+if st.session_state["confirm_mode_change"]:
+    st.warning(
+        f"Вы действительно хотите перейти в режим '{st.session_state['pending_mode']}'? "
+        "Все несохранённые данные будут утеряны."
+    )
+    col_c1, col_c2 = st.columns(2)
+    with col_c1:
+        if st.button("Да, перейти", type="primary"):
+            # Подтверждаем смену режима
+            st.session_state["mode"] = st.session_state["pending_mode"]
+            st.session_state["mode_selector"] = st.session_state["mode"]
+            st.session_state["confirm_mode_change"] = False
+            # Очищаем временные данные, относящиеся к режимам
+            for k in ["dataset_editor", "bulk_pairs", "manual_text1", "manual_text2"]:
+                if k in st.session_state:
+                    del st.session_state[k]
+    with col_c2:
+        if st.button("Отмена"):
+            st.session_state["pending_mode"] = st.session_state["mode"]
+            st.session_state["confirm_mode_change"] = False
+            st.session_state["mode_selector"] = st.session_state["mode"]
+
+mode = st.session_state["mode"]
 
 # ======= Блок: ручной ввод =======
 def _set_manual_value(key: str, val: str):
@@ -405,9 +491,9 @@ if mode == "Ручной ввод":
                                 st.success("Сохранено в истории.")
 
 # ======= Блок: файл =======
-if mode == "Файл (CSV/XLSX)":
-    st.header("1. Загрузите CSV или Excel с колонками: phrase_1, phrase_2, topics (опционально)")
-    uploaded_file = st.file_uploader("Выберите файл", type=["csv", "xlsx", "xls"])
+if mode == "Файл (CSV/XLSX/JSON)":
+    st.header("1. Загрузите CSV, Excel или JSON с колонками: phrase_1, phrase_2, topics (опционально)")
+    uploaded_file = st.file_uploader("Выберите файл", type=["csv", "xlsx", "xls", "json", "ndjson"])
 
     if uploaded_file is not None:
         try:
@@ -493,8 +579,8 @@ if mode == "Файл (CSV/XLSX)":
             colA.metric("Размер датасета", f"{total}")
             colB.metric("Средний score", f"{df['score'].mean():.4f}")
             colC.metric("Медиана score", f"{df['score'].median():.4f}")
-            colD.metric(f"Низкие (<{low_score_threshold:.2f})", f"{low_cnt} ({low_cnt/max(total,1):.0%})")
-            st.caption(f"Неочевидные совпадения (high-sem/low-lex): {susp_cnt} ({susp_cnt/max(total,1):.0%})")
+            colD.metric(f"Низкие (<{low_score_threshold:.2f})", f"{low_cnt} ({(low_cnt / max(total,1)):.0%})")
+            st.caption(f"Неочевидные совпадения (high-sem/low-lex): {susp_cnt} ({(susp_cnt / max(total,1)):.0%})")
 
         # = Explore =
         with tabs[1]:
@@ -535,7 +621,7 @@ if mode == "Файл (CSV/XLSX)":
         with tabs[2]:
             st.markdown("#### Срезы качества")
             # длина (по сумме токенов обеих фраз)
-            len_bins = st.selectbox("Бинning по длине (сумма токенов)", ["[0,4]", "[5,9]", "[10,19]", "[20,+)"], index=1)
+            len_bins = st.selectbox("Биннинг по длине (сумма токенов)", ["[0,4]", "[5,9]", "[10,19]", "[20,+)"], index=1)
             def _len_bucket(r):
                 n = int(r["phrase_1_len_tok"] + r["phrase_2_len_tok"])
                 if n <= 4: return "[0,4]"
@@ -561,7 +647,7 @@ if mode == "Файл (CSV/XLSX)":
                 flags_view = []
                 for flag in ["_any_neg","_any_num","_any_date"]:
                     sub = df[df[flag]]
-                    flags_view.append({"флаг":flag, "count":len(sub), "mean":sub["score"].mean() if len(sub)>0 else np.nan})
+                    flags_view.append({"флаг":flag, "count":len(sub), "mean":float(sub["score"].mean()) if len(sub)>0 else np.nan})
                 st.dataframe(pd.DataFrame(flags_view), use_container_width=True)
             with cols1[2]:
                 if _MORPH is None:
@@ -609,9 +695,15 @@ if mode == "Файл (CSV/XLSX)":
                 delta_df = df.copy()
                 delta_df["delta"] = delta_df["score_b"] - delta_df["score"]
                 st.markdown("**Топ, где B ≫ A**")
-                st.dataframe(delta_df.sort_values("delta", ascending=True).head(10)[["phrase_1","phrase_2","score","score_b","delta"]], use_container_width=True)
+                st.dataframe(
+                    delta_df.sort_values("delta", ascending=False).head(10)[["phrase_1","phrase_2","score","score_b","delta"]],
+                    use_container_width=True
+                )
                 st.markdown("**Топ, где A ≫ B**")
-                st.dataframe(delta_df.sort_values("delta", ascending=False).head(10)[["phrase_1","phrase_2","score","score_b","delta"]], use_container_width=True)
+                st.dataframe(
+                    delta_df.sort_values("delta", ascending=True).head(10)[["phrase_1","phrase_2","score","score_b","delta"]],
+                    use_container_width=True
+                )
 
         # = Export =
         with tabs[4]:
@@ -692,7 +784,7 @@ if st.session_state["history"]:
             if not saved_df.empty:
                 styled_hist_df = style_suspicious_and_low(saved_df, rec.get("semantic_threshold", 0.8), rec.get("lexical_threshold", 0.3), 0.75)
                 st.dataframe(styled_hist_df, use_container_width=True)
-        elif rec.get("source") in ("manual_bulk_suspicious", "manual_bulk_suspicious"):
+        elif rec.get("source") in ("manual_bulk_suspicious",):
             st.markdown(f"**Ручной suspicious**  |  **Дата:** {rec.get('timestamp','-')}")
             st.markdown(f"**Пар:** {rec.get('pairs_count', 0)}  |  **Модель A:** {rec.get('model_a','-')}")
             saved_df = pd.DataFrame(rec.get("results", []))
