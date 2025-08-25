@@ -170,9 +170,7 @@ with st.sidebar:
             raw = f.read()
             txt = clean_text(extract_text_from_pdf_bytes(raw))
             st.session_state.docs.append({"name": f.name, "text": txt})
-        st.success(f"{len(uploaded)} файл(ов) загружено.")
-
-    if st.button("Обновить FAISS индекс"):
+        # Авто-обновление FAISS
         all_chunks = []
         all_embeddings = []
         for doc in st.session_state.docs:
@@ -182,7 +180,7 @@ with st.sidebar:
             all_embeddings.append(emb)
         embeddings_matrix = np.vstack(all_embeddings)
         save_index(all_chunks, embeddings_matrix)
-        st.success("FAISS индекс обновлён ✅")
+        st.success("FAISS индекс обновлён автоматически ✅")
 
     if st.button("Очистить все данные"):
         st.session_state.docs = []
@@ -193,7 +191,7 @@ with st.sidebar:
 
 # Main
 if not st.session_state.docs:
-    st.info("Загрузите PDF и обновите FAISS индекс.")
+    st.info("Загрузите PDF.")
     st.stop()
 
 faiss_index, chunks = load_index()
@@ -249,7 +247,7 @@ st.subheader("📌 Быстрая сводка документа")
 doc_select = st.selectbox("Выбрать документ для резюме", options=[d['name'] for d in st.session_state.docs])
 if st.button("Сделать краткое резюме"):
     idx = [d['name'] for d in st.session_state.docs].index(doc_select)
-    text_for_sum = " ".join(chunks[idx*TOP_K: idx*TOP_K + 6])  # первые 6 чанков документа
+    text_for_sum = " ".join(chunks[idx*TOP_K: idx*TOP_K + 6])
     summ = generate_answer("Коротко перескажи основные условия документа (пару предложений).", text_for_sum)
     st.success("Резюме:")
     st.write(summ)
