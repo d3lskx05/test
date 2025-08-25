@@ -25,7 +25,7 @@ CHUNKS_PATH = os.path.join(DATA_DIR, "chunks.pkl")
 CACHE_PATH = os.path.join(DATA_DIR, "hf_cache.json")
 os.makedirs(DATA_DIR, exist_ok=True)
 
-HF_API_URL = "https://api-inference.huggingface.co/models/google/flan-t5-base"
+HF_API_URL = "https://api-inference.huggingface.co/models/google/flan-t5-small"
 HF_API_TOKEN = st.secrets["HF_API_TOKEN"]
 
 # -----------------------------
