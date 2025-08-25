@@ -1,4 +1,4 @@
-# app_faiss_full.py
+# app_faiss_free.py
 import streamlit as st
 from PyPDF2 import PdfReader
 from sentence_transformers import SentenceTransformer
@@ -25,6 +25,7 @@ CHUNKS_PATH = os.path.join(DATA_DIR, "chunks.pkl")
 CACHE_PATH = os.path.join(DATA_DIR, "hf_cache.json")
 os.makedirs(DATA_DIR, exist_ok=True)
 
+# ✅ Бесплатная модель для HF API
 HF_API_URL = "https://api-inference.huggingface.co/models/google/flan-t5-small"
 HF_API_TOKEN = st.secrets["HF_API_TOKEN"]
 
@@ -153,8 +154,8 @@ def generate_answer(question: str, context: str):
 # -----------------------------
 # Streamlit UI
 # -----------------------------
-st.set_page_config(page_title="Банковский помощник (MVP)", layout="wide")
-st.title("📄 Банковский помощник — анализ документов с FAISS")
+st.set_page_config(page_title="Банковский помощник (Free HF API)", layout="wide")
+st.title("📄 Банковский помощник — бесплатный HF API + FAISS")
 
 # Инициализация session_state
 if "docs" not in st.session_state:
