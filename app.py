@@ -26,7 +26,7 @@ CACHE_PATH = os.path.join(DATA_DIR, "hf_cache.json")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # ✅ Бесплатная модель для HF API
-HF_API_URL = "https://api-inference.huggingface.co/models/google/flan-t5-small"
+HF_API_URL = "https://api-inference.huggingface.co/models/openai/gpt-oss-20b"
 HF_API_TOKEN = st.secrets["HF_API_TOKEN"]
 
 # -----------------------------
