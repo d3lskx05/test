@@ -1,4 +1,4 @@
-# app.py
+# app_faiss_full.py
 import streamlit as st
 from PyPDF2 import PdfReader
 from sentence_transformers import SentenceTransformer
@@ -8,7 +8,9 @@ import io
 import os
 import json
 import requests
+import pickle
 from datetime import datetime
+import faiss
 
 # -----------------------------
 # Настройки
@@ -16,9 +18,15 @@ from datetime import datetime
 EMBED_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 CHUNK_SIZE = 800
 TOP_K = 3
-CONTEXT_LIMIT = 2000  # символов для HF API
+CONTEXT_LIMIT = 2000
 DATA_DIR = "data_storage"
+INDEX_PATH = os.path.join(DATA_DIR, "faiss_index.index")
+CHUNKS_PATH = os.path.join(DATA_DIR, "chunks.pkl")
+CACHE_PATH = os.path.join(DATA_DIR, "hf_cache.json")
 os.makedirs(DATA_DIR, exist_ok=True)
+
+HF_API_URL = "https://api-inference.huggingface.co/models/google/flan-t5-base"
+HF_API_TOKEN = st.secrets["HF_API_TOKEN"]
 
 # -----------------------------
 # Загрузка embedder
@@ -63,36 +71,29 @@ def chunk_text(text: str, max_chars: int = CHUNK_SIZE):
     return chunks
 
 def build_embeddings(chunks):
-    return np.array(embedder.encode(chunks, show_progress_bar=False))
+    return np.array(embedder.encode(chunks, show_progress_bar=False)).astype("float32")
 
-def save_embeddings(doc_name, chunks, embeddings):
-    path = os.path.join(DATA_DIR, f"{doc_name}_chunks.json")
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump({"chunks": chunks, "embeddings": embeddings.tolist()}, f)
+def save_index(chunks, embeddings):
+    faiss_index = faiss.IndexFlatIP(embeddings.shape[1])
+    faiss_index.add(embeddings)
+    faiss.write_index(faiss_index, INDEX_PATH)
+    with open(CHUNKS_PATH, "wb") as f:
+        pickle.dump(chunks, f)
 
-def load_embeddings(doc_name):
-    path = os.path.join(DATA_DIR, f"{doc_name}_chunks.json")
-    if not os.path.exists(path):
-        return None, None
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-        return data["chunks"], np.array(data["embeddings"])
+def load_index():
+    if os.path.exists(INDEX_PATH) and os.path.exists(CHUNKS_PATH):
+        index = faiss.read_index(INDEX_PATH)
+        with open(CHUNKS_PATH, "rb") as f:
+            chunks = pickle.load(f)
+        return index, chunks
+    return None, None
 
-def retrieve_top_k(question, all_chunks, all_embeddings, top_k=TOP_K):
-    if not all_chunks or not all_embeddings:
+def retrieve_top_k_faiss(question, index, chunks, top_k=TOP_K):
+    if index is None or chunks is None or len(chunks)==0:
         return []
-    q_emb = embedder.encode([question], show_progress_bar=False)[0]
-    best = []
-    for chunks, emb in zip(all_chunks, all_embeddings):
-        if emb.size == 0:
-            continue
-        norms = np.linalg.norm(emb, axis=1) * (np.linalg.norm(q_emb) + 1e-9)
-        sims = (emb @ q_emb) / norms
-        idxs = np.argsort(sims)[::-1][:top_k]
-        for i in idxs:
-            best.append((sims[i], chunks[i]))
-    best_sorted = sorted(best, key=lambda x: x[0], reverse=True)[:top_k]
-    return [chunk for (_, chunk) in best_sorted]
+    q_emb = build_embeddings([question])
+    scores, idxs = index.search(q_emb, top_k)
+    return [chunks[i] for i in idxs[0]]
 
 def highlight_terms(snippet: str, question: str):
     terms = set([w.lower() for w in re.findall(r"\w{3,}", question)])
@@ -113,11 +114,8 @@ def extract_money_percent_dates(text: str):
     return items
 
 # -----------------------------
-# Backend: HF API генерация и кэширование
+# HF API генерация и кэш
 # -----------------------------
-HF_API_URL = "https://api-inference.huggingface.co/models/google/flan-t5-base"
-HF_API_TOKEN = st.secrets["HF_API_TOKEN"]
-CACHE_PATH = os.path.join(DATA_DIR, "hf_cache.json")
 if os.path.exists(CACHE_PATH):
     with open(CACHE_PATH, "r", encoding="utf-8") as f:
         hf_cache = json.load(f)
@@ -156,18 +154,14 @@ def generate_answer(question: str, context: str):
 # Streamlit UI
 # -----------------------------
 st.set_page_config(page_title="Банковский помощник (MVP)", layout="wide")
-st.title("📄 Банковский помощник — анализ договоров (MVP)")
+st.title("📄 Банковский помощник — анализ документов с FAISS")
 
+# Инициализация session_state
 if "docs" not in st.session_state:
     st.session_state.docs = []
-if "chunks" not in st.session_state:
-    st.session_state.chunks = []
-if "embeddings" not in st.session_state:
-    st.session_state.embeddings = []
 if "history" not in st.session_state:
     st.session_state.history = []
 
-# Sidebar
 with st.sidebar:
     st.header("⚙️ Управление")
     uploaded = st.file_uploader("Загрузить PDF", type=["pdf"], accept_multiple_files=True)
@@ -178,32 +172,31 @@ with st.sidebar:
             st.session_state.docs.append({"name": f.name, "text": txt})
         st.success(f"{len(uploaded)} файл(ов) загружено.")
 
-    if st.button("Обновить индекс"):
-        st.session_state.chunks = []
-        st.session_state.embeddings = []
+    if st.button("Обновить FAISS индекс"):
+        all_chunks = []
+        all_embeddings = []
         for doc in st.session_state.docs:
-            ch, emb = load_embeddings(doc["name"])
-            if ch and emb is not None:
-                st.session_state.chunks.append(ch)
-                st.session_state.embeddings.append(emb)
-            else:
-                ch = chunk_text(doc["text"])
-                emb = build_embeddings(ch)
-                save_embeddings(doc["name"], ch, emb)
-                st.session_state.chunks.append(ch)
-                st.session_state.embeddings.append(emb)
-        st.success("Индекс обновлён ✅")
+            ch = chunk_text(doc["text"])
+            emb = build_embeddings(ch)
+            all_chunks.extend(ch)
+            all_embeddings.append(emb)
+        embeddings_matrix = np.vstack(all_embeddings)
+        save_index(all_chunks, embeddings_matrix)
+        st.success("FAISS индекс обновлён ✅")
 
     if st.button("Очистить все данные"):
         st.session_state.docs = []
-        st.session_state.chunks = []
-        st.session_state.embeddings = []
         st.session_state.history = []
+        if os.path.exists(INDEX_PATH): os.remove(INDEX_PATH)
+        if os.path.exists(CHUNKS_PATH): os.remove(CHUNKS_PATH)
+        st.success("Данные очищены.")
 
-# Main area
+# Main
 if not st.session_state.docs:
-    st.info("Загрузите PDF и обновите индекс.")
+    st.info("Загрузите PDF и обновите FAISS индекс.")
     st.stop()
+
+faiss_index, chunks = load_index()
 
 # Показ документов и сравнение
 col1, col2 = st.columns([3,1])
@@ -222,7 +215,7 @@ with col2:
     sel_compare = st.multiselect("Выбрать 2 документа", options=doc_names, max_selections=2)
     if st.button("Сравнить выбранные"):
         if len(sel_compare) != 2:
-            st.warning("Выберите ровно 2 документа для сравнения.")
+            st.warning("Выберите ровно 2 документа.")
         else:
             idxs = [doc_names.index(n) for n in sel_compare]
             info1 = extract_money_percent_dates(st.session_state.docs[idxs[0]]['text'])
@@ -232,11 +225,11 @@ with col2:
             st.write("Суммы:", {sel_compare[0]: info1.get('sums',[]), sel_compare[1]: info2.get('sums',[])})
             st.write("Даты:", {sel_compare[0]: info1.get('dates',[]), sel_compare[1]: info2.get('dates',[])})
 
-# Вопрос/ответ
+# Вопросы
 st.subheader("Задайте вопрос по документам")
 question = st.text_input("Вопрос:")
 if st.button("Отправить"):
-    top_chunks = retrieve_top_k(question, st.session_state.chunks, st.session_state.embeddings)
+    top_chunks = retrieve_top_k_faiss(question, faiss_index, chunks)
     context = "\n\n".join(top_chunks)[:CONTEXT_LIMIT]
     answer = generate_answer(question, context)
     st.session_state.history.append({"q": question, "a": answer, "ctx": top_chunks})
@@ -256,7 +249,7 @@ st.subheader("📌 Быстрая сводка документа")
 doc_select = st.selectbox("Выбрать документ для резюме", options=[d['name'] for d in st.session_state.docs])
 if st.button("Сделать краткое резюме"):
     idx = [d['name'] for d in st.session_state.docs].index(doc_select)
-    text_for_sum = " ".join(st.session_state.chunks[idx][:6])
+    text_for_sum = " ".join(chunks[idx*TOP_K: idx*TOP_K + 6])  # первые 6 чанков документа
     summ = generate_answer("Коротко перескажи основные условия документа (пару предложений).", text_for_sum)
     st.success("Резюме:")
     st.write(summ)
